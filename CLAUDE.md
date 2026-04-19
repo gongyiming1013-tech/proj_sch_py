@@ -2,7 +2,58 @@
 
 ## 1. Coding Standards & Design Principles
 
+### Clean Code
+
+- **Keep functions small** and focused on a single responsibility.
+- **Prefer clarity over cleverness.** Code is read far more often than it is written.
+- **Type safety:** Use the language's type system (type hints, generics, static types) in all method signatures wherever possible.
+- **Encapsulation:** Expose the minimum public API necessary. All internal state and helpers must be private.
+
+### Implementation Approach
+
+Choose the simplest approach that fits the problem:
+
+| Approach | When to use |
+|----------|------------|
+| **Functions** | Algorithm problems, single-responsibility logic, user explicitly requests no OOD, V0/MVP rapid prototyping |
+| **OOD (Classes)** | Maintaining internal state, multiple related operations sharing data, polymorphism/strategy switching, system design problems |
+
+Default to functions unless there is a clear reason for classes. If the user explicitly requests no OOD, use functions only.
+
+### Test-Driven Development (TDD)
+
+Tests are not an afterthought — they are a core design tool. Always follow this order:
+
+1. **Define the contract first:** Establish function signatures or class interfaces that describe the expected behavior.
+2. **Write tests against the contract:** Develop test cases based on the expected behavior before any implementation exists.
+3. **Implement to pass the tests:** Write the minimum concrete code needed to satisfy the test suite.
+
+This ensures that every component is testable by design, contracts are explicit and well-understood, and regressions are caught immediately.
+
+### Code Structure
+
+#### Function-based
+
+Organize function-based modules in a consistent order:
+
+1. Module-level documentation (docstring / doc comment)
+2. Constants
+3. Helper functions (private, prefixed with `_`)
+4. Public functions
+5. Entry point / main logic
+
+#### Class-based
+
+Organize every class in a consistent order:
+
+1. Class-level documentation (docstring / doc comment)
+2. Constructor / initializer
+3. Public methods
+4. Private helpers
+
 ### OOD Best Practices
+
+Apply only when OOD is the chosen approach.
 
 - **Favor Composition over Inheritance.** Compose behavior from small, focused objects rather than deep inheritance hierarchies.
 - **Use appropriate Design Patterns** based on the domain. Prefer simple, well-known patterns:
@@ -14,19 +65,9 @@
   - **Command / State** — when the domain calls for them
 - **Avoid complex patterns** (Builder, Abstract Factory, nested Decorators) unless the problem explicitly requires them.
 
-### Test-Driven Development (TDD)
-
-Tests are not an afterthought — they are a core design tool. Always follow this order:
-
-1. **Define the interface first:** Establish abstract classes or interfaces that describe the contract.
-2. **Write tests against the contract:** Develop test cases based on the expected behavior before any implementation exists.
-3. **Implement to pass the tests:** Write the minimum concrete code needed to satisfy the test suite.
-
-This ensures that every component is testable by design, contracts are explicit and well-understood, and regressions are caught immediately.
-
 ### SOLID Principles
 
-All designs must be decoupled, interface-based, and extensible. Do NOT over-engineer.
+Apply only when OOD is the chosen approach. Do NOT over-engineer.
 
 - **S — Single Responsibility:** One class, one job. Keep each class and method concise and focused.
 - **O — Open/Closed:** Add new behavior via new classes or modules, not by modifying existing ones.
@@ -46,25 +87,9 @@ Use descriptive, ubiquitous language for all entities, variables, and methods.
 | Constants             | UPPER_SNAKE_CASE   | `MAX_CAPACITY`, `DEFAULT_TIMEOUT`|
 | Private members       | Language-appropriate access modifier or naming convention | `_cache` (Python), `private` (Java/C++) |
 
-### Clean Code
-
-- **Keep functions small** and focused on a single responsibility.
-- **Prefer clarity over cleverness.** Code is read far more often than it is written.
-- **Type safety:** Use the language's type system (type hints, generics, static types) in all method signatures wherever possible.
-- **Encapsulation:** Expose the minimum public API necessary. All internal state and helpers must be private.
-
-### Class Structure
-
-Organize every class in a consistent order:
-
-1. Class-level documentation (docstring / doc comment)
-2. Constructor / initializer
-3. Public methods
-4. Private helpers
-
 ### Comments & Documentation
 
-- Every class and public method must have a doc comment.
+- Every public function, class, and method must have a doc comment.
 - Inline comments explain **why**, not **what**.
 - Do not over-comment obvious code.
 
@@ -95,13 +120,13 @@ Analyze the requirements and produce the **Overview** and **Design** sections of
      - **Architecture** — diagram showing component relationships and data flow.
      - **Design Patterns** — table of patterns used, where, and why.
      - **Strategy Comparisons** (if applicable) — table of alternatives considered with pros, cons, and verdict.
-     - **Class & Data Structure Reference** — every class, interface, record, and enum with fields, method signatures, and thread-safety annotations.
+     - **Class / Function & Data Structure Reference** — every function, class, interface, record, and enum with signatures, fields, and thread-safety annotations.
      - **Test Plan** — table listing test dimensions, what each dimension covers, and key scenarios. Example dimensions: core functionality, edge cases, error handling, concurrency, performance.
    - Each planned version must include:
      - **Goal** — one sentence summarizing the version's objective.
      - **Strategy Comparison** — placeholder for candidate approaches and trade-offs.
      - **Design Discussion** — open questions to resolve before implementation.
-     - **Class & Data Structure Changes** — placeholder for new and modified types.
+     - **Class / Function & Data Structure Changes** — placeholder for new and modified types.
      - **Test Plan** — placeholder table for test dimensions and scenarios to cover.
 
 ### Phase B: Roadmap & Implementation Plan
@@ -119,7 +144,7 @@ After completing Phase A and Phase B, the `DEVELOPMENT_PLAN.md` is ready for rev
 
 ### Phase C: Contract & TDD Setup
 
-1. **Define Stubs:** Create abstract classes / interfaces and method signatures based on the plan.
+1. **Define Stubs:** Create function stubs or abstract classes/interfaces based on the chosen approach.
 2. **Write Test Cases:** Develop comprehensive unit tests based on the API contract.
 3. **User Review:** STOP and ask the user to review the test suite before proceeding to implementation.
 
@@ -141,7 +166,7 @@ After completing Phase A and Phase B, the `DEVELOPMENT_PLAN.md` is ready for rev
 ### Test Coverage
 
 - Maintain a minimum of **95% branch coverage**.
-- Every public class and method must have corresponding test cases.
+- Every public function, class, and method must have corresponding test cases.
 - Use the language's standard test framework (e.g., `pytest`, `JUnit`, `Jest`, `go test`).
 
 ### Edge Cases
