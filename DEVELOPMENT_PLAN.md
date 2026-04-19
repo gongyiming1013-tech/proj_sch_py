@@ -89,6 +89,76 @@
 
 ---
 
+### V0.1 — Function-Based Sequential Scheduler
+
+**Goal:** Provide a function-based equivalent of V0 — same Kahn's algorithm, same cycle semantics — implemented as pure functions over plain `dict`/`list` structures, illustrating the "Functions" approach from CLAUDE.md §Implementation Approach.
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────┐
+│                Client Code                   │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+       ┌──────────────────────────────────────┐
+       │   schedule(projects, dependencies)    │  ◄── Public function
+       │   (src/scheduler_func.py)             │
+       └────────────────┬─────────────────────┘
+                        │ calls
+         ┌──────────────┴───────────────┐
+         ▼                              ▼
+ ┌──────────────────┐         ┌──────────────────┐
+ │ _build_graph()   │────────▶│ _kahn_sort()     │
+ │ returns          │         │ pure function    │
+ │ (adj, in_degree) │         │ over dicts       │
+ └──────────────────┘         └────────┬─────────┘
+                                       │ raises on cycle
+                                       ▼
+                          ┌────────────────────────┐
+                          │ CyclicDependencyError  │ (defined in same module)
+                          └────────────────────────┘
+```
+
+**Data flow:** Client → `schedule(projects, dependencies)` → `_build_graph` returns `(adjacency, in_degree)` dicts → `_kahn_sort` consumes them → returns ordered list or raises `CyclicDependencyError`.
+
+**Self-contained:** V0.1 does not import from V0's modules (`src.exceptions`, `src.graph`, `src.scheduler`). Its own `SchedulerError` and `CyclicDependencyError` live at the top of `src/scheduler_func.py`.
+
+#### Strategy Comparison — OOD (V0) vs Function-Based (V0.1)
+
+| Approach              | Pros                                                                                       | Cons                                                                                          | Verdict          |
+|-----------------------|--------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|------------------|
+| **OOD (V0)**          | Strategy-pattern seam for V1+ enrichment. Clear extension surface. Encapsulated graph state. | More files, more ceremony. Indirection cost for a single algorithm.                          | Kept as V0.      |
+| **Function-based (V0.1)** | Minimal code (~30 LOC). Stateless; easy to reason about and test. Closer to algorithmic spec. No constructor / no instance lifecycle. | No strategy seam — adding a parallel variant in V1 requires either a sibling function or a thin dispatch layer. | Adopted as V0.1. |
+
+**Verdict:** Both are valid for V0's scope. We keep V0 to preserve the strategy seam for V1, and add V0.1 to provide a concrete A/B comparison and satisfy the "Functions default" guidance for algorithm problems.
+
+#### Class / Function & Data Structure Reference
+
+| Type                    | Kind              | Signature / Fields                                                                                                              | Thread-Safe              |
+|-------------------------|-------------------|--------------------------------------------------------------------------------------------------------------------------------|--------------------------|
+| `schedule`              | Function (public) | `schedule(projects: list[str], dependencies: list[tuple[str, str]]) -> list[str]` — entry point; orchestrates build + sort.    | Yes (no shared state)    |
+| `_build_graph`          | Function (private)| `_build_graph(projects, dependencies) -> tuple[dict[str, list[str]], dict[str, int]]` — returns adjacency + in-degree maps; raises `SchedulerError` on unknown node. | Yes |
+| `_kahn_sort`            | Function (private)| `_kahn_sort(projects, adjacency, in_degree) -> list[str]` — runs Kahn's BFS; returns order or raises `CyclicDependencyError`.  | Yes                      |
+| `SchedulerError`        | Exception         | Defined locally in `src/scheduler_func.py`. Base error for V0.1.                                                                | N/A                      |
+| `CyclicDependencyError` | Exception         | Defined locally in `src/scheduler_func.py`. Subclass of local `SchedulerError`.                                                  | N/A                      |
+
+**Module:** `src/scheduler_func.py` (single self-contained module — no imports from V0).
+**Internal data structures:** Plain `dict[str, list[str]]` for adjacency, `dict[str, int]` for in-degree. No wrapper class.
+
+#### Test Plan
+
+| Dimension              | Covers                                       | Key Scenarios                                                                                           |
+|------------------------|----------------------------------------------|---------------------------------------------------------------------------------------------------------|
+| Core functionality     | Valid topological ordering                   | Linear chain, diamond DAG, multiple independent components, single project, all-independent projects.   |
+| Cycle detection        | Cyclic dependency error                      | Simple 2-node cycle, 3-node cycle, self-dependency, cycle within a larger graph.                        |
+| Edge cases             | Boundary and degenerate inputs               | Empty project list, single project with no deps, duplicate dependencies, unknown project in dependency. |
+| Input validation       | Malformed or inconsistent input              | Dependency referencing a project not in the project list (raises `SchedulerError`).                     |
+| Ordering correctness   | Every dependency pair respected in output    | For each `(a, b)` in dependencies, `a` precedes `b` in the result.                                     |
+| Equivalence with V0    | Sanity cross-check (Option A — single test) | One test feeds 1–2 representative inputs (e.g., diamond DAG) to both `SequentialScheduler.schedule` (V0) and `scheduler_func.schedule` (V0.1); both outputs must satisfy all dependency constraints (need not be byte-identical). |
+
+---
+
 ### V1 (Planned) — Parallel-Aware Scheduler
 
 **Goal:** Allow multiple independent projects to execute concurrently within a single scheduling step, producing a level-based execution plan.
@@ -129,6 +199,15 @@ _Placeholder — new and modified types to be defined._
 - [x] Implement `SequentialScheduler` using Kahn's algorithm over `DependencyGraph`.
 - [x] Write unit tests covering all test plan dimensions (core, cycle, edge cases, validation, ordering).
 - [x] Verify ≥ 95% branch coverage (achieved 100%).
+
+### V0.1 — Function-Based Sequential Scheduler
+
+**Scope:** Add a function-based sequential scheduler as a parallel V0 implementation. Same Kahn's algorithm, same cycle semantics — but no classes, no ABC, no `DependencyGraph` wrapper. The module is **self-contained**: it defines its own local `SchedulerError` / `CyclicDependencyError` and does not import from V0's modules. Demonstrates the "Functions" approach (CLAUDE.md §Implementation Approach) and gives the user a concrete A/B comparison against V0. Tests mirror V0 dimensions and add one Option-A equivalence sanity check.
+
+- [x] Create `src/scheduler_func.py` containing local `SchedulerError` / `CyclicDependencyError`, public `schedule()`, and private `_build_graph()` / `_kahn_sort()` helpers. No imports from V0.
+- [x] Write unit tests in `tests/test_scheduler_func.py` mirroring V0 dimensions (core, cycle, edge cases, validation, ordering) — 18 tests, all passing.
+- [x] Add **one** equivalence sanity test: feed a representative input (diamond DAG) to both `SequentialScheduler` (V0) and `scheduler_func.schedule` (V0.1); assert both outputs satisfy every dependency constraint.
+- [x] Verify ≥ 95% branch coverage (achieved 100% — 37 stmts / 14 branches).
 
 ### V1 — Parallel-Aware Scheduler
 
