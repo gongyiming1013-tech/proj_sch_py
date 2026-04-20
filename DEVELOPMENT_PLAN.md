@@ -159,31 +159,151 @@
 
 ---
 
-### V1 (Planned) — Parallel-Aware Scheduler
+### V1 — Parallel-Aware Scheduler (OOD)
 
-**Goal:** Allow multiple independent projects to execute concurrently within a single scheduling step, producing a level-based execution plan.
+**Goal:** Produce a level-grouped execution plan where every project within a level can execute concurrently (unbounded compute assumed), preserving all dependency constraints.
 
-#### Strategy Comparison
+**Scope assumption:** Compute resources are unlimited — every level emits *all* projects whose dependencies are already satisfied. No `max_parallelism` cap in V1; that can be revisited in V2 if resource/cost models are introduced.
 
-_Placeholder — to be filled before V1 implementation._
+#### Architecture
 
-#### Design Discussion
+```
+┌─────────────────────────────────────────────────┐
+│                   Client Code                    │
+└──────────────────────┬──────────────────────────┘
+                       │
+                       ▼
+          ┌────────────────────────────────┐
+          │  ParallelProjectScheduler      │  ◄── New abstract interface
+          │  (Protocol / ABC)              │      for parallel variants
+          │  + schedule_parallel() ->      │
+          │    list[list[str]]             │
+          └────────────┬───────────────────┘
+                       │ implements
+                       ▼
+          ┌────────────────────────┐       ┌──────────────────────┐
+          │  ParallelScheduler     │──────▶│   DependencyGraph    │
+          │  (level-BFS Kahn's)    │ reuse │  (imported from V0)  │
+          └────────────┬───────────┘       └──────────────────────┘
+                       │ raises on cycle
+                       ▼
+          ┌────────────────────────┐
+          │  CyclicDependencyError │  (reused from V0)
+          └────────────────────────┘
+```
 
-- Should the output be `list[list[str]]` (groups of concurrently runnable projects per level)?
-- How to handle configurable max-parallelism (e.g., at most N projects at once)?
-- Should we introduce a `Project` value object with metadata (duration estimate, resource requirements)?
+**Data flow:** Client → `ParallelScheduler.schedule_parallel(projects, dependencies)` → builds `DependencyGraph` → runs level-BFS Kahn's (drain all zero-in-degree nodes as one level, decrement neighbors, repeat) → returns `list[list[str]]` or raises `CyclicDependencyError`.
 
-#### Class & Data Structure Changes
+**Separation from V0's ABC:** `ParallelProjectScheduler` is a *new* abstract interface — it does **not** inherit from `ProjectScheduler`, because the return shape differs (`list[list[str]]` vs `list[str]`) and forcing a common supertype would violate LSP. V0 and V1 live side by side; both reuse `DependencyGraph` and `CyclicDependencyError`.
 
-_Placeholder — new and modified types to be defined._
+#### Design Patterns
+
+| Pattern  | Where                          | Why                                                                 |
+|----------|--------------------------------|---------------------------------------------------------------------|
+| Strategy | `ParallelProjectScheduler` ABC | Room for future variants (e.g., priority-weighted, resource-aware). |
+| Reuse (composition over inheritance) | `ParallelScheduler` uses `DependencyGraph` | Avoid re-implementing graph construction/validation. |
+
+#### Strategy Comparison — Level-Grouping Algorithm
+
+| Approach                                 | Pros                                                                                   | Cons                                                                 | Verdict     |
+|------------------------------------------|----------------------------------------------------------------------------------------|----------------------------------------------------------------------|-------------|
+| **Level-BFS Kahn's** (drain all zero-in-degree per step) | Minimal change from V0's Kahn's. Cycle detection falls out naturally. Output is exactly the level grouping. | Requires collecting all current zero-in-degree nodes before decrement. | **Selected** |
+| **Longest-path levels** (node level = max predecessor level + 1) | Produces the same grouping; no BFS queue. | Two passes over the graph; harder to integrate cycle detection cleanly. | Rejected    |
+
+**Verdict:** Level-BFS Kahn's — lowest cognitive delta from V0, and cycle detection is inherited.
+
+#### Class & Data Structure Reference
+
+| Type                        | Kind      | Fields / Attributes          | Key Methods                                                                                                         | Thread-Safe |
+|-----------------------------|-----------|------------------------------|---------------------------------------------------------------------------------------------------------------------|-------------|
+| `ParallelProjectScheduler`  | ABC       | —                            | `schedule_parallel(projects: list[str], dependencies: list[tuple[str, str]]) -> list[list[str]]` (abstract)         | N/A         |
+| `ParallelScheduler`         | Class     | —                            | `schedule_parallel(projects, dependencies) -> list[list[str]]` — builds graph, runs level-BFS, returns level groups or raises `CyclicDependencyError`. | No (V1) |
+| `DependencyGraph`           | Class     | (reused from V0, unchanged)  | (reused from V0)                                                                                                    | No          |
+| `CyclicDependencyError`     | Exception | (reused from V0)             | (reused from V0)                                                                                                    | N/A         |
+
+**Module:** `src/parallel_scheduler.py` — imports `DependencyGraph` from `src.graph` and `CyclicDependencyError` from `src.exceptions`.
+**Output semantics:** `[["A"], ["B", "C"], ["D"]]` means A runs first (level 0), then B and C run concurrently (level 1), then D runs (level 2). Within a level, order is not significant.
 
 #### Test Plan
 
-| Dimension             | Covers                                       | Key Scenarios          |
-|-----------------------|----------------------------------------------|------------------------|
-| Parallel grouping     | Correct level assignment                     | _To be defined._       |
-| Max-parallelism cap   | Respects concurrency limits                  | _To be defined._       |
-| Regression            | All V0 scenarios still pass                  | _To be defined._       |
+| Dimension             | Covers                                       | Key Scenarios                                                                                           |
+|-----------------------|----------------------------------------------|---------------------------------------------------------------------------------------------------------|
+| Core functionality    | Valid level grouping                         | Linear chain (each project its own level), diamond DAG (middle level has 2 projects), independent projects (single level), single project, empty input. |
+| Cycle detection       | Cyclic dependency error                      | Simple 2-node cycle, 3-node cycle, self-dependency, cycle within a larger graph.                        |
+| Edge cases            | Boundary and degenerate inputs               | Empty project list → `[]`, single project with no deps → `[["X"]]`, duplicate dependencies, unknown project in dependency. |
+| Input validation      | Malformed or inconsistent input              | Dependency referencing a project not in the project list.                                                |
+| Ordering correctness  | Every dependency pair respected across levels | For each `(a, b)` in dependencies, level(a) < level(b) in the result.                                  |
+| Parallelism maximality| Every project appears in the earliest level its deps allow | Diamond DAG: middle two projects must share a level, not be split.                                      |
+| V0 regression         | V0's `SequentialScheduler` unaffected        | Running V0 test suite after V1 lands still passes unchanged.                                            |
+
+---
+
+### V1.1 — Function-Based Parallel Scheduler
+
+**Goal:** Provide a function-based equivalent of V1 — same level-BFS Kahn's, same cycle semantics — added to `src/scheduler_func.py` alongside V0.1's `schedule()`. Mirrors the V0 → V0.1 pattern one level up.
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────┐
+│                Client Code                   │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+     ┌──────────────────────────────────────────┐
+     │  schedule_parallel(projects, deps)        │  ◄── New public function
+     │  (src/scheduler_func.py, sibling of V0.1) │
+     └────────────────┬─────────────────────────┘
+                      │ calls
+       ┌──────────────┴────────────────┐
+       ▼                               ▼
+ ┌──────────────────┐          ┌──────────────────────┐
+ │ _build_graph()   │─────────▶│ _kahn_level_sort()   │
+ │ (reused from V0.1)│         │ pure function        │
+ └──────────────────┘          │ over dicts           │
+                               └────────┬─────────────┘
+                                        │ raises on cycle
+                                        ▼
+                          ┌──────────────────────────┐
+                          │ CyclicDependencyError    │ (reused from V0.1, local)
+                          └──────────────────────────┘
+```
+
+**Data flow:** Client → `schedule_parallel(projects, dependencies)` → `_build_graph` (reused from V0.1) returns `(adjacency, in_degree)` → `_kahn_level_sort` drains zero-in-degree nodes per level → returns `list[list[str]]` or raises `CyclicDependencyError`.
+
+**Self-contained:** Stays in `src/scheduler_func.py`, reusing V0.1's `_build_graph` and local exceptions. No imports from V0 or V1's OOD modules.
+
+#### Strategy Comparison — OOD (V1) vs Function-Based (V1.1)
+
+| Approach                | Pros                                                                                   | Cons                                                                                | Verdict           |
+|-------------------------|----------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|-------------------|
+| **OOD (V1)**            | Strategy seam for future parallel variants. `ParallelScheduler` is a drop-in alongside `SequentialScheduler`. | More files, more ceremony. Two ABCs now coexist (`ProjectScheduler` + `ParallelProjectScheduler`). | Kept as V1.       |
+| **Function-based (V1.1)** | ~20 additional LOC on top of V0.1. Stateless; reuses `_build_graph`. Closer to algorithmic spec. | No strategy seam — additional variants require sibling functions. | Adopted as V1.1.  |
+
+**Verdict:** Keep both, mirroring V0/V0.1. Once V2's direction is clear (metadata/cost models vs. pure algorithm enrichment), consolidate or diverge accordingly.
+
+#### Class / Function & Data Structure Reference
+
+| Type                    | Kind              | Signature / Fields                                                                                                                     | Thread-Safe              |
+|-------------------------|-------------------|----------------------------------------------------------------------------------------------------------------------------------------|--------------------------|
+| `schedule_parallel`     | Function (public) | `schedule_parallel(projects: list[str], dependencies: list[tuple[str, str]]) -> list[list[str]]` — entry point; orchestrates build + level-BFS. | Yes (no shared state)    |
+| `_kahn_level_sort`      | Function (private)| `_kahn_level_sort(projects, adjacency, in_degree) -> list[list[str]]` — level-BFS variant of Kahn's; returns level groups or raises `CyclicDependencyError`. | Yes                      |
+| `_build_graph`          | Function (private, reused) | Unchanged from V0.1.                                                                                                          | Yes                      |
+| `CyclicDependencyError` | Exception (reused from V0.1) | Unchanged.                                                                                                                 | N/A                      |
+
+**Module:** `src/scheduler_func.py` (single self-contained module — V0.1 + V1.1 coexist, share `_build_graph` and local exceptions).
+
+#### Test Plan
+
+| Dimension              | Covers                                       | Key Scenarios                                                                                           |
+|------------------------|----------------------------------------------|---------------------------------------------------------------------------------------------------------|
+| Core functionality     | Valid level grouping                         | Linear chain, diamond DAG, independent projects, single project, empty input.                           |
+| Cycle detection        | Cyclic dependency error                      | Simple 2-node cycle, 3-node cycle, self-dependency, cycle within a larger graph.                        |
+| Edge cases             | Boundary and degenerate inputs               | Empty project list, single project, duplicate dependencies, unknown project in dependency.              |
+| Input validation       | Malformed or inconsistent input              | Dependency referencing a project not in the project list.                                                |
+| Ordering correctness   | Every dependency pair respected across levels | For each `(a, b)` in dependencies, level(a) < level(b).                                                |
+| Parallelism maximality | Every project appears in the earliest feasible level | Diamond DAG: middle two projects must share the same level.                                       |
+| Equivalence with V1    | Sanity cross-check (Option A — single test) | One test feeds a representative input (diamond DAG) to both `ParallelScheduler.schedule_parallel` (V1) and `scheduler_func.schedule_parallel` (V1.1); both outputs must satisfy every dependency constraint and produce the same number of levels. |
 
 ---
 
@@ -209,11 +329,21 @@ _Placeholder — new and modified types to be defined._
 - [x] Add **one** equivalence sanity test: feed a representative input (diamond DAG) to both `SequentialScheduler` (V0) and `scheduler_func.schedule` (V0.1); assert both outputs satisfy every dependency constraint.
 - [x] Verify ≥ 95% branch coverage (achieved 100% — 37 stmts / 14 branches).
 
-### V1 — Parallel-Aware Scheduler
+### V1 — Parallel-Aware Scheduler (OOD)
 
-**Scope:** Extend the scheduler to produce level-grouped output where independent projects within the same level can execute concurrently. Introduce an optional max-parallelism parameter. Retain backward compatibility with the V0 interface.
+**Scope:** Add an OOD parallel scheduler that emits a level-grouped plan (`list[list[str]]`) — every project whose dependencies are satisfied runs in the same level, with no concurrency cap (unlimited compute assumed). V0 is untouched. The new `ParallelProjectScheduler` ABC is introduced as a sibling to V0's `ProjectScheduler` (separate interfaces — LSP-safe) and `ParallelScheduler` is its first concrete implementation, reusing V0's `DependencyGraph` and `CyclicDependencyError`.
 
-- [ ] Design parallel grouping algorithm and update Design section.
-- [ ] Implement `ParallelScheduler` (new Strategy implementation).
-- [ ] Add tests for parallel grouping, max-parallelism, and V0 regression.
-- [ ] Verify ≥ 95% branch coverage.
+- [x] Define new ABC `ParallelProjectScheduler` with `schedule_parallel()` signature in `src/parallel_scheduler.py`.
+- [x] Implement `ParallelScheduler` using level-BFS Kahn's, reusing `DependencyGraph` and `CyclicDependencyError` from V0.
+- [x] Write unit tests in `tests/test_parallel_scheduler.py` covering all test plan dimensions (core, cycle, edge cases, validation, ordering, parallelism maximality) — 18 tests.
+- [x] Regression check: full V0 test suite still passes unchanged.
+- [x] Verify ≥ 95% branch coverage (achieved 100% — 26 stmts / 10 branches).
+
+### V1.1 — Function-Based Parallel Scheduler
+
+**Scope:** Add a function-based parallel scheduler to `src/scheduler_func.py` alongside V0.1's `schedule()`. Reuses V0.1's local `_build_graph` and `CyclicDependencyError`. New private helper `_kahn_level_sort()` drains all zero-in-degree nodes per iteration to produce levels. No imports from V0 or V1's OOD modules. Tests mirror V1 dimensions and add one Option-A equivalence sanity check against V1.
+
+- [x] Add `schedule_parallel()` public function and `_kahn_level_sort()` private helper to `src/scheduler_func.py`.
+- [x] Write unit tests in a **new file** `tests/test_scheduler_func_parallel.py` mirroring V1 dimensions (keeps V0.1 tests in `tests/test_scheduler_func.py` unchanged) — 19 tests.
+- [x] Add **one** equivalence sanity test: feed a representative input (diamond DAG) to both `ParallelScheduler.schedule_parallel` (V1) and `scheduler_func.schedule_parallel` (V1.1); assert outputs satisfy all dependency constraints and produce identical level counts.
+- [x] Verify ≥ 95% branch coverage (achieved 100% — `src/scheduler_func.py`: 58 stmts / 24 branches combined V0.1 + V1.1).

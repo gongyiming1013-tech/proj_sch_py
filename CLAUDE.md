@@ -18,7 +18,9 @@ Choose the simplest approach that fits the problem:
 | **Functions** | Algorithm problems, single-responsibility logic, user explicitly requests no OOD, V0/MVP rapid prototyping |
 | **OOD (Classes)** | Maintaining internal state, multiple related operations sharing data, polymorphism/strategy switching, system design problems |
 
-Default to functions unless there is a clear reason for classes. If the user explicitly requests no OOD, use functions only.
+In the planning phase, compare OOD (object-oriented design) and non-OOD approaches for the task at hand:
+- If both are suitable, use functions as the V0 for rapid POC, and note OOD as the V1 path for scale-up.
+- If the user explicitly specifies OOD or non-OOD, follow that instruction directly — do not re-evaluate.
 
 ### Test-Driven Development (TDD)
 
@@ -183,4 +185,4 @@ After completing Phase A and Phase B, the `DEVELOPMENT_PLAN.md` is ready for rev
 
 - Prefer clarity over cleverness.
 - Keep each class and method concise and focused.
-- When proposing a solution, briefly explain the design rationale.
+- When proposing a solution, briefly explain the design rationale
