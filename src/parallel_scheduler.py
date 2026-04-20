@@ -37,7 +37,9 @@ class ParallelProjectScheduler(ABC):
         Returns:
             A list of levels; each inner list contains project names that
             may run concurrently once all prior-level projects complete.
-            Order within a level is not significant.
+            Within a level, project order follows the original `projects`
+            input order (deterministic), though callers should treat the
+            level as an unordered set for correctness purposes.
 
         Raises:
             CyclicDependencyError: If dependencies contain a cycle.
@@ -75,7 +77,7 @@ class ParallelScheduler(ParallelProjectScheduler):
         plan: list[list[str]] = []
         placed = 0
         while current_level:
-            plan.append(current_level)
+            plan.append(list(current_level))
             placed += len(current_level)
             next_level: list[str] = []
             for node in current_level:

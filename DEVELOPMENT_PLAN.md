@@ -222,7 +222,7 @@
 | `CyclicDependencyError`     | Exception | (reused from V0)             | (reused from V0)                                                                                                    | N/A         |
 
 **Module:** `src/parallel_scheduler.py` — imports `DependencyGraph` from `src.graph` and `CyclicDependencyError` from `src.exceptions`.
-**Output semantics:** `[["A"], ["B", "C"], ["D"]]` means A runs first (level 0), then B and C run concurrently (level 1), then D runs (level 2). Within a level, order is not significant.
+**Output semantics:** `[["A"], ["B", "C"], ["D"]]` means A runs first (level 0), then B and C run concurrently (level 1), then D runs (level 2). Within a level, project order follows the original `projects` input order (deterministic), though callers should treat the level as an unordered set for correctness purposes.
 
 #### Test Plan
 
@@ -347,3 +347,16 @@
 - [x] Write unit tests in a **new file** `tests/test_scheduler_func_parallel.py` mirroring V1 dimensions (keeps V0.1 tests in `tests/test_scheduler_func.py` unchanged) — 19 tests.
 - [x] Add **one** equivalence sanity test: feed a representative input (diamond DAG) to both `ParallelScheduler.schedule_parallel` (V1) and `scheduler_func.schedule_parallel` (V1.1); assert outputs satisfy all dependency constraints and produce identical level counts.
 - [x] Verify ≥ 95% branch coverage (achieved 100% — `src/scheduler_func.py`: 58 stmts / 24 branches combined V0.1 + V1.1).
+
+---
+
+## Backlog (Post-V1 Hardening)
+
+Low-priority items surfaced during PR #3 code and security review. None are correctness defects at V1's current scope; each becomes relevant when the library is wrapped behind an interface that accepts untrusted input, or when a future version needs tighter invariants.
+
+- [ ] **Duplicate-project validation.** `DependencyGraph.__init__` and `_build_graph` silently dedupe keys via `dict` construction. Decide: (a) reject duplicate project names with `SchedulerError` at both public APIs, or (b) document "projects list must contain unique names" in the public docstrings. Affects `src/graph.py`, `src/scheduler_func.py`.
+- [ ] **Self-loop dedicated error message.** Self-dependency `("A", "A")` currently surfaces as the generic `CyclicDependencyError("Cyclic dependency detected")`. Add an explicit guard in `_build_graph` / `DependencyGraph.__init__` that raises `SchedulerError(f"Self-dependency not allowed: '{prereq}'")` so callers can locate the offending edge. Update cycle-detection tests that currently rely on the generic message.
+- [ ] **Encapsulate `DependencyGraph.all_nodes`.** Property returns the internal `_nodes` set by reference; caller can mutate it and corrupt subsequent `in_degree` / `neighbors` calls. Change to `return frozenset(self._nodes)` (or `set(self._nodes)`). Aligns with CLAUDE.md §Clean Code "All internal state must be private."
+- [ ] **Optional: expose `DependencyGraph.in_degrees() -> dict[str, int]` accessor.** `ParallelScheduler.schedule_parallel` currently builds the in-degree map via a per-node method-call comprehension. A snapshot accessor that returns `dict(self._in_degree)` would read cleaner and mirrors the `neighbors()` / `in_degree()` API style. Not worth adding unless `DependencyGraph` is being expanded for other reasons.
+- [ ] **Optional: edge deduplication in `_build_graph` / `DependencyGraph`.** Duplicate edges are currently counted separately (decrement twice, first decrement-to-zero schedules, second decrement is harmless). Functionally correct but allows adversarial inputs to inflate `adjacency` to arbitrary size. Consider coalescing via a `seen: set[tuple[str, str]]` guard if input size bounds ever become a real concern.
+- [ ] **Test/docstring alignment on within-level ordering.** Addressed in follow-up: docstrings now state "Within a level, project order follows the original `projects` input order (deterministic)." Remaining work: if the Output semantics is ever relaxed back to "order not significant," switch the strict `assert plan == [["A"], ["B"], ["C"]]` tests to set-based comparisons via the existing `_assert_valid_level_plan` helper.
