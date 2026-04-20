@@ -124,3 +124,76 @@ def schedule(
     """
     adjacency, in_degree = _build_graph(projects, dependencies)
     return _kahn_sort(projects, adjacency, in_degree)
+
+
+# ── V1.1 — Parallel-aware additions (Phase C stubs) ─────────────────
+
+
+def _kahn_level_sort(
+    projects: list[str],
+    adjacency: dict[str, list[str]],
+    in_degree: dict[str, int],
+) -> list[list[str]]:
+    """Run level-BFS Kahn's algorithm to produce parallel level groups.
+
+    Each iteration drains *all* currently zero-in-degree projects into one
+    level, then decrements their dependents' in-degrees. Repeats until the
+    graph is empty (success) or progress stalls (cycle).
+
+    Args:
+        projects: Original project list (used for deterministic level order).
+        adjacency: Adjacency map from `_build_graph`.
+        in_degree: In-degree map from `_build_graph` (copied locally).
+
+    Returns:
+        A list of levels; each inner list contains projects runnable in
+        parallel at that level.
+
+    Raises:
+        CyclicDependencyError: If progress stalls before all projects are placed.
+    """
+    remaining = dict(in_degree)
+    current_level = [node for node in projects if remaining[node] == 0]
+
+    plan: list[list[str]] = []
+    placed = 0
+    while current_level:
+        plan.append(current_level)
+        placed += len(current_level)
+        next_level: list[str] = []
+        for node in current_level:
+            for neighbor in adjacency[node]:
+                remaining[neighbor] -= 1
+                if remaining[neighbor] == 0:
+                    next_level.append(neighbor)
+        current_level = next_level
+
+    if placed != len(projects):
+        raise CyclicDependencyError("Cyclic dependency detected")
+
+    return plan
+
+
+def schedule_parallel(
+    projects: list[str],
+    dependencies: list[tuple[str, str]],
+) -> list[list[str]]:
+    """Produce a level-grouped execution plan (unbounded parallelism).
+
+    Projects within a level may execute concurrently; every project is
+    placed in the earliest level its prerequisites allow.
+
+    Args:
+        projects: List of project names.
+        dependencies: List of (prerequisite, dependent) pairs.
+
+    Returns:
+        List of levels; each inner list contains concurrently runnable projects.
+        Order within a level is not significant.
+
+    Raises:
+        CyclicDependencyError: If dependencies contain a cycle.
+        SchedulerError: If a dependency references a project not in `projects`.
+    """
+    adjacency, in_degree = _build_graph(projects, dependencies)
+    return _kahn_level_sort(projects, adjacency, in_degree)
