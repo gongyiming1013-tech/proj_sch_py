@@ -158,7 +158,7 @@ def _kahn_level_sort(
     plan: list[list[str]] = []
     placed = 0
     while current_level:
-        plan.append(current_level)
+        plan.append(list(current_level))
         placed += len(current_level)
         next_level: list[str] = []
         for node in current_level:
@@ -189,7 +189,9 @@ def schedule_parallel(
 
     Returns:
         List of levels; each inner list contains concurrently runnable projects.
-        Order within a level is not significant.
+        Within a level, project order follows the original `projects` input
+        order (deterministic), though callers should treat the level as an
+        unordered set for correctness purposes.
 
     Raises:
         CyclicDependencyError: If dependencies contain a cycle.
